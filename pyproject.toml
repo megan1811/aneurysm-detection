@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "aneurysm-detection"
+version = "0.1.0"
+description = ""
+authors = ["Megan Fillion <megan1811@gmail.com>"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+kaggle = "^1.7.4.5"
+pandas = "^2.3.2"
+matplotlib = "^3.10.6"
+seaborn = "^0.13.2"
+pydicom = "^3.0.1"
+ipywidgets = "^8.1.7"
+nibabel = "^5.3.2"
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
