@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 import ast
 from utils.preprocess import dicom_pixel_to_world
 
-DATA_DIR = Path("/Volumes/T7 Shield/aneurysm-detection-data")
+DATA_DIR = Path("/Volumes/Oxygen/aneurysm-detection-data")
 
 
 def compute_world_coordinates(df_loc: pd.DataFrame) -> pd.DataFrame:
