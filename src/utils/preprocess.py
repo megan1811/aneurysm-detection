@@ -3,7 +3,6 @@ import SimpleITK as sitk
 from pathlib import Path
 from SimpleITK import Image as SITKImage
 import pydicom
-import pandas as pd
 
 REQUIRED_TAGS = ["ImagePositionPatient", "ImageOrientationPatient", "PixelSpacing"]
 
@@ -186,19 +185,19 @@ def load_and_preprocess(series_id: str, modality: str, base_dir: Path) -> SITKIm
     return image
 
 
-def jitter_coords(world_coord: np.array, max_jitter: float = 8.0) -> tuple:
+def jitter_coords(vox_coord: np.array, max_jitter: float = 8.0) -> tuple:
     """
     Add random uniform jitter to a 3D world coordinate.
 
     Args:
-        world_coord (np.array): 3D patient-space (LPS) world coordinate (3 ,).
+        vox_coord (np.array): Voxel coordinate of aneurism in sltk image (3 ,).
         max_jitter (float): Maximum absolute jitter in millimeters applied along each axis.
 
     Returns:
-        tuple: Jittered world coordinate as a 3-element tuple of floats.
+        tuple: Jittered voxek coordinate as a 3-element tuple of floats.
     """
     jitter = np.random.uniform(-max_jitter, max_jitter, size=3)
-    return tuple(np.array(world_coord) + jitter)
+    return tuple(np.array(vox_coord) + jitter)
 
 
 def world_to_voxel(sitk_img: SITKImage, world_coord: np.array) -> tuple | None:
@@ -224,21 +223,20 @@ def world_to_voxel(sitk_img: SITKImage, world_coord: np.array) -> tuple | None:
 
 
 def extract_patch_sitk(
-    sitk_img: SITKImage, center_world_coord: np.array, patch_size: int = 32
+    sitk_img: SITKImage, center_voxel: np.array, patch_size: int = 32
 ) -> SITKImage:
     """
     Extract a cubic 3D patch from a SimpleITK image around a given world-space center.
 
     Args:
         sitk_img (SITKImage): Input 3D image.
-        center_world_coord: Center of the patch in the image’s physical (LPS) space.
+        center_vox_coord: Center voxel of desired patch.
         patch_size (int): Edge length of the cubic patch in voxels.
 
     Returns:
         SITKImage: Cropped SimpleITK image patch of size (patch_size, patch_size, patch_size),
         clipped to remain inside the input volume.
     """
-    center_voxel = world_to_voxel(sitk_img, center_world_coord)
     if center_voxel is None:
         raise ValueError("Center world coordinate is outside the image volume.")
 
@@ -281,32 +279,6 @@ def patch_sitk_to_numpy(patch_sitk: SITKImage) -> np.ndarray:
         np.ndarray: Patch data as a float32 NumPy array with shape (z, y, x).
     """
     return sitk.GetArrayFromImage(patch_sitk).astype(np.float32)
-
-
-def is_far_from_aneurysms(
-    world_coord: np.array, df_aneurysms: pd.DataFrame, padding: int = 16
-) -> bool:
-    """
-    Check whether a world-space point is at least a given distance away from all aneurysm centers.
-
-    Args:
-        world_coord (np.array): 3D point in world/patient space.
-        df_aneurysms: Pandas DataFrame with aneurysm centers in columns
-            ['world_x', 'world_y', 'world_z'].
-        padding (int): Minimum allowed distance in millimeters from any aneurysm center.
-
-    Returns:
-        bool: True if the point is at least `padding` mm away from all aneurysms,
-        False if it lies within `padding` of any aneurysm center.
-    """
-    if df_aneurysms.empty:
-        return True
-
-    centers = df_aneurysms[["world_x", "world_y", "world_z"]].to_numpy(dtype=float)
-    world = np.asarray(world_coord, dtype=float)
-
-    dists_sq = np.sum((centers - world) ** 2, axis=1)
-    return bool(np.all(dists_sq >= padding**2))
 
 
 if __name__ == "__main__":
@@ -399,22 +371,22 @@ if __name__ == "__main__":
         # Deterministic jitter for the test
         np.random.seed(0)
 
-        world_coord = np.array([10.0, 20.0, 30.0], dtype=float)
+        vox_coord = np.array([10.0, 20.0, 30.0], dtype=float)
         max_jitter = 5.0
-        jittered = jitter_coords(world_coord, max_jitter=max_jitter)
+        jittered = jitter_coords(vox_coord, max_jitter=max_jitter)
 
         assert isinstance(jittered, tuple), f"type={type(jittered)}"
         assert len(jittered) == 3, f"len={len(jittered)}"
 
         jittered_arr = np.asarray(jittered, dtype=float)
-        diffs = jittered_arr - world_coord
+        diffs = jittered_arr - vox_coord
 
         # Each component should be within [-max_jitter, max_jitter]
         assert np.all(diffs >= -max_jitter - 1e-6), f"diffs lower bound: {diffs}"
         assert np.all(diffs <= max_jitter + 1e-6), f"diffs upper bound: {diffs}"
 
         # With a fixed seed, we also know it shouldn't be exactly the same coord
-        assert not np.allclose(jittered_arr, world_coord), "jitter had no effect"
+        assert not np.allclose(jittered_arr, vox_coord), "jitter had no effect"
 
         print("✅ _test_jitter_coords passed")
 
@@ -445,10 +417,10 @@ if __name__ == "__main__":
         img.SetSpacing((1.0, 1.0, 1.0))
         img.SetOrigin((0.0, 0.0, 0.0))
 
-        center_world = np.array([10.0, 15.0, 20.0], dtype=float)
+        center_voxel = np.array([10.0, 15.0, 20.0], dtype=float)
         patch_size = 8
         patch = extract_patch_sitk(
-            img, center_world_coord=center_world, patch_size=patch_size
+            img, center_voxel=center_voxel, patch_size=patch_size
         )
 
         # In index space, patch size should be exactly (8,8,8)
@@ -463,9 +435,9 @@ if __name__ == "__main__":
         img_small.SetSpacing((1.0, 1.0, 1.0))
         img_small.SetOrigin((0.0, 0.0, 0.0))
 
-        center_world_small = np.array([5.0, 4.0, 3.0], dtype=float)  # roughly center
+        center_voxel_small = np.array([5.0, 4.0, 3.0], dtype=float)  # roughly center
         patch_large = extract_patch_sitk(
-            img_small, center_world_coord=center_world_small, patch_size=16
+            img_small, center_voxel=center_voxel_small, patch_size=16
         )
 
         # Patch should be clipped to image size: can't exceed original dims
@@ -486,31 +458,6 @@ if __name__ == "__main__":
 
         print("✅ _test_patch_sitk_to_numpy passed")
 
-    def _test_is_far_from_aneurysms():
-        # Single aneurysm at (0,0,0)
-        df = pd.DataFrame(
-            [{"world_x": 0.0, "world_y": 0.0, "world_z": 0.0}],
-            dtype=float,
-        )
-
-        # Exactly at aneurysm center → NOT far
-        assert is_far_from_aneurysms(np.array([0.0, 0.0, 0.0]), df, padding=10) is False
-
-        # Within padding distance (distance=5 < padding=10) → NOT far
-        assert is_far_from_aneurysms(np.array([5.0, 0.0, 0.0]), df, padding=10) is False
-
-        # Outside padding distance (distance=15 > padding=10) → far
-        assert is_far_from_aneurysms(np.array([15.0, 0.0, 0.0]), df, padding=10) is True
-
-        # Empty dataframe → always far
-        df_empty = pd.DataFrame(columns=["world_x", "world_y", "world_z"])
-        assert (
-            is_far_from_aneurysms(np.array([0.0, 0.0, 0.0]), df_empty, padding=10)
-            is True
-        )
-
-        print("✅ _test_is_far_from_aneurysms passed")
-
     # Run tests
     _test_dicom_pixel_to_world()
     _test_resample_image()
@@ -520,6 +467,5 @@ if __name__ == "__main__":
     _test_world_to_voxel()
     _test_extract_patch_sitk()
     _test_patch_sitk_to_numpy()
-    _test_is_far_from_aneurysms()
 
     print("🎉 All tests passed.")

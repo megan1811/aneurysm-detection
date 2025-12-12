@@ -11,6 +11,7 @@ from utils.preprocess import (
     jitter_coords,
     extract_patch_sitk,
     patch_sitk_to_numpy,
+    world_to_voxel,
 )
 
 # Patch extraction parameters
@@ -56,7 +57,7 @@ if __name__ == "__main__":
                 "modality",  # Imaging modality (CTA, MRA, etc.)
                 "patch_filepath",  # Path to .npz file on disk
                 "split",  # Data split ("train", "val", "test")
-                "world_coords",  # Patch center in world coordinates (mm)
+                "center_coords",  # Patch center in world coordinates (voxels)
                 "label",  # 1 = aneurysm, 0 = negative
                 "location",  # Aneurysm location label (or NaN for negatives)
             ]
@@ -78,6 +79,7 @@ if __name__ == "__main__":
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
             ### Load Volume and basic preprocess / check
             try:
+                ### output: sitk image reoriented to RAS
                 sitk_img = load_and_preprocess(
                     series_id, modality, base_dir=args.series_dir
                 )
@@ -95,14 +97,17 @@ if __name__ == "__main__":
                 continue
 
             df_aneurysms = df_loc[df_loc["SeriesInstanceUID"] == series_id]
+            anerysm_vox_centers = []
 
             ### Positive (aneurysm-centered) patches
             for _, loc_row in df_aneurysms.iterrows():
-                loc_coord = (loc_row["l"], loc_row["p"], loc_row["s"])
+                world_coord = (loc_row["l"], loc_row["p"], loc_row["s"])
+                vox_coord = world_to_voxel(sitk_img, world_coord)
+                anerysm_vox_centers.append(vox_coord)
 
                 # Draw several jittered patches around the aneurysm center
                 for _ in range(POS_SAMPLES):
-                    jittered_coord = jitter_coords(loc_coord, max_jitter=MAX_JITTER)
+                    jittered_coord = jitter_coords(vox_coord, max_jitter=MAX_JITTER)
                     try:
                         patch_sitk = extract_patch_sitk(
                             sitk_img, jittered_coord, patch_size=PATCH_SIZE
@@ -129,7 +134,7 @@ if __name__ == "__main__":
                         "modality": modality,
                         "patch_filepath": str(patch_filepath),
                         "split": split,
-                        "world_coords": jittered_coord,
+                        "center_coords": jittered_coord,
                         "label": 1,
                         "location": loc_row.location,
                     }
@@ -138,27 +143,28 @@ if __name__ == "__main__":
             ### Generate Negative patches (not near any aneurysm)
             radius_vox = PATCH_SIZE // 2
             padding = 18.0  # mm
-            aneurysm_coords = df_aneurysms[["l", "p", "s"]].to_numpy()  # Nx3 array
+            anerysm_vox_centers = np.array(anerysm_vox_centers)
 
             # Negative samples
             for j in range(NEG_SAMPES):
-                center_voxel = [
+                patch_center = [
                     np.random.randint(radius_vox, vol_size[d] - radius_vox)
                     for d in range(3)
                 ]
-                # Convert from voxel index to physical (world) coordinates
-                center_coord = sitk_img.TransformIndexToPhysicalPoint(center_voxel)
+
                 # Compute distances from this candidate center to all aneurysm centers
-                dists = np.linalg.norm(aneurysm_coords - np.array(center_coord), axis=1)
+                dists = np.linalg.norm(
+                    anerysm_vox_centers - np.array(patch_center), axis=1
+                )
                 # Reject candidates that are too close to any aneurysm
                 if np.any(dists < padding):
                     continue  # too close to an aneurysm
 
                 try:
-                    patch_sitk = extract_patch_sitk(sitk_img, center_coord, PATCH_SIZE)
+                    patch_sitk = extract_patch_sitk(sitk_img, patch_center, PATCH_SIZE)
                 except ValueError as e:
                     print(
-                        f"Error extracting negative patch for series {series_id} at coord {center_coord}: {e}"
+                        f"Error extracting negative patch for series {series_id} at coord {patch_center}: {e}"
                     )
                     continue
                 patch_np = patch_sitk_to_numpy(patch_sitk)
@@ -173,7 +179,7 @@ if __name__ == "__main__":
                     "modality": modality,
                     "patch_filepath": str(patch_filepath),
                     "split": split,
-                    "world_coords": center_coord,
+                    "center_coords": patch_center,
                     "label": 0,
                     "location": np.nan,
                 }
