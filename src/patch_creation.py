@@ -50,6 +50,11 @@ if __name__ == "__main__":
     if patch_metadata_path.exists():
         df_metadata = pd.read_csv(patch_metadata_path)
     else:
+        patch_dir.mkdir(parents=True, exist_ok=True)
+        patch_dir.joinpath("train").mkdir(exist_ok=True)
+        patch_dir.joinpath("val").mkdir(exist_ok=True)
+        patch_dir.joinpath("test").mkdir(exist_ok=True)
+
         df_metadata = pd.DataFrame(
             columns=[
                 "patch_id",  # Unique patch identifier (UUID)
