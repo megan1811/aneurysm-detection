@@ -197,7 +197,7 @@ def jitter_coords(vox_coord: np.array, max_jitter: float = 8.0) -> tuple:
         tuple: Jittered voxek coordinate as a 3-element tuple of floats.
     """
     jitter = np.random.uniform(-max_jitter, max_jitter, size=3)
-    return tuple(np.array(vox_coord) + jitter)
+    return tuple([int(vox_dim) for vox_dim in np.array(vox_coord) + jitter])
 
 
 def world_to_voxel(sitk_img: SITKImage, world_coord: np.array) -> tuple | None:

@@ -148,14 +148,20 @@ if __name__ == "__main__":
             ### Generate Negative patches (not near any aneurysm)
             radius_vox = PATCH_SIZE // 2
             padding = 18.0  # mm
-            anerysm_vox_centers = np.array(anerysm_vox_centers)
+            anerysm_vox_centers = (
+                np.array(anerysm_vox_centers)
+                if anerysm_vox_centers
+                else np.empty((0, 3))
+            )
 
             # Negative samples
             for j in range(NEG_SAMPES):
-                patch_center = [
-                    np.random.randint(radius_vox, vol_size[d] - radius_vox)
-                    for d in range(3)
-                ]
+                patch_center = tuple(
+                    [
+                        np.random.randint(radius_vox, vol_size[d] - radius_vox)
+                        for d in range(3)
+                    ]
+                )
 
                 # Compute distances from this candidate center to all aneurysm centers
                 dists = np.linalg.norm(
