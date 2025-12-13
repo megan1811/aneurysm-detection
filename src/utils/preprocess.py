@@ -104,18 +104,32 @@ def resample_image(
     return resampler.Execute(image)
 
 
-def reorient_to_RAS(image: SITKImage) -> SITKImage:
+def reorient_to_LPS(image: SITKImage) -> SITKImage:
     """
-    Reorient a SimpleITK image to RAS anatomical orientation (Right–Anterior–Superior).
+    Canonicalize voxel axis orientation to LPS (Left–Posterior–Superior).
+
+    IMPORTANT:
+    - This does NOT change the patient coordinate system (which is already LPS
+      for all DICOM images).
+    - This function standardizes how voxel axes map to patient directions so that:
+        * voxel +X always points toward Left
+        * voxel +Y always points toward Posterior
+        * voxel +Z always points toward Superior
+    - This guarantees consistent spatial semantics across scans, which is critical
+      when using voxel coordinates or aggregating spatial information.
+
+    In short:
+    - DICOM guarantees LPS *patient space*
+    - This enforces LPS *voxel orientation*
 
     Args:
-        image (SITKImage): Input image in any orientation.
+        image (SITKImage): Input image in arbitrary voxel orientation.
 
     Returns:
-        SITKImage: Image reoriented to RAS coordinate convention.
+        SITKImage: Image with voxel axes aligned to canonical LPS orientation.
     """
     transform = sitk.DICOMOrientImageFilter()
-    transform.SetDesiredCoordinateOrientation("RAS")
+    transform.SetDesiredCoordinateOrientation("LPS")
     return transform.Execute(image)
 
 
@@ -177,7 +191,9 @@ def load_and_preprocess(series_id: str, modality: str, base_dir: Path) -> SITKIm
     if image.GetDimension() == 4:
         raise ValueError("4D DICOM series are not supported.")
 
-    image = reorient_to_RAS(image)
+    # Canonicalize voxel axes so that all scans share the same
+    # Left/Posterior/Superior axis semantics (patient space remains LPS)
+    image = reorient_to_LPS(image)
 
     image = resample_image(image, new_spacing=[1, 1, 1], is_label=False)
     image = normalize_intensity(image, modality=modality)
@@ -279,6 +295,26 @@ def patch_sitk_to_numpy(patch_sitk: SITKImage) -> np.ndarray:
         np.ndarray: Patch data as a float32 NumPy array with shape (z, y, x).
     """
     return sitk.GetArrayFromImage(patch_sitk).astype(np.float32)
+
+
+def coords_to_m1p1(vox_coords, vol_size) -> tuple:
+    """
+    Normalize voxel coordinates to the range [-1, 1] along each axis.
+
+    Args:
+        vox_coords (tuple): Voxel coordinates (x, y, z) in index space.
+        vol_size (tuple): Volume size (size_x, size_y, size_z).
+
+    Returns:
+        tuple: Normalized coordinates (x, y, z) as floats in the range [-1, 1].
+    """
+    x, y, z = vox_coords
+    sx, sy, sz = vol_size
+    return (
+        2.0 * (x / (sx - 1)) - 1.0,
+        2.0 * (y / (sy - 1)) - 1.0,
+        2.0 * (z / (sz - 1)) - 1.0,
+    )
 
 
 if __name__ == "__main__":
@@ -458,6 +494,34 @@ if __name__ == "__main__":
 
         print("✅ _test_patch_sitk_to_numpy passed")
 
+    def _test_coords_to_m1p1():
+        vol_size = (10, 20, 30)  # (x, y, z)
+
+        # ---- minimum corner ----
+        c_min = (0, 0, 0)
+        out_min = coords_to_m1p1(c_min, vol_size)
+        assert out_min == (-1.0, -1.0, -1.0), f"min={out_min}"
+
+        # ---- maximum corner ----
+        c_max = (vol_size[0] - 1, vol_size[1] - 1, vol_size[2] - 1)
+        out_max = coords_to_m1p1(c_max, vol_size)
+        assert out_max == (1.0, 1.0, 1.0), f"max={out_max}"
+
+        # ---- center of volume ----
+        c_center = (
+            (vol_size[0] - 1) / 2,
+            (vol_size[1] - 1) / 2,
+            (vol_size[2] - 1) / 2,
+        )
+        out_center = coords_to_m1p1(c_center, vol_size)
+        assert np.allclose(out_center, (0.0, 0.0, 0.0)), f"center={out_center}"
+
+        # ---- output type ----
+        assert isinstance(out_center, tuple), f"type={type(out_center)}"
+        assert len(out_center) == 3, f"len={len(out_center)}"
+
+        print("✅ _test_coords_to_m1p1 passed")
+
     # Run tests
     _test_dicom_pixel_to_world()
     _test_resample_image()
@@ -467,5 +531,6 @@ if __name__ == "__main__":
     _test_world_to_voxel()
     _test_extract_patch_sitk()
     _test_patch_sitk_to_numpy()
+    _test_coords_to_m1p1()
 
     print("🎉 All tests passed.")

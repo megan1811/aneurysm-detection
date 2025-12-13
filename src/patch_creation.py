@@ -12,6 +12,7 @@ from utils.preprocess import (
     extract_patch_sitk,
     patch_sitk_to_numpy,
     world_to_voxel,
+    coords_to_m1p1,
 )
 
 # Patch extraction parameters
@@ -62,7 +63,7 @@ if __name__ == "__main__":
                 "modality",  # Imaging modality (CTA, MRA, etc.)
                 "patch_filepath",  # Path to .npz file on disk
                 "split",  # Data split ("train", "val", "test")
-                "center_coords",  # Patch center in world coordinates (voxels)
+                "center_coords",  # Patch center (x,y,z) normalized to [-1,1] in volume index space
                 "label",  # 1 = aneurysm, 0 = negative
                 "location",  # Aneurysm location label (or NaN for negatives)
             ]
@@ -84,7 +85,6 @@ if __name__ == "__main__":
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
             ### Load Volume and basic preprocess / check
             try:
-                ### output: sitk image reoriented to RAS
                 sitk_img = load_and_preprocess(
                     series_id, modality, base_dir=args.series_dir
                 )
@@ -93,6 +93,11 @@ if __name__ == "__main__":
                 continue
 
             vol_size = sitk_img.GetSize()
+            if vol_size[0] < 2 or vol_size[1] < 2 or vol_size[2] < 2:
+                print(
+                    f"Invalid volume size for coord normalization: {vol_size}. Skipping series {series_id}."
+                )
+                continue
 
             # Skip series that are too small to fit a full PATCH_SIZE^3 cube
             if any(vol_size[d] < PATCH_SIZE for d in range(3)):
@@ -108,6 +113,12 @@ if __name__ == "__main__":
             for _, loc_row in df_aneurysms.iterrows():
                 world_coord = (loc_row["l"], loc_row["p"], loc_row["s"])
                 vox_coord = world_to_voxel(sitk_img, world_coord)
+                if vox_coord is None:
+                    print(
+                        f"Skipping aneurysm coord outside volume: {series_id} {world_coord}"
+                    )
+                    continue
+
                 anerysm_vox_centers.append(vox_coord)
 
                 # Draw several jittered patches around the aneurysm center
@@ -139,7 +150,7 @@ if __name__ == "__main__":
                         "modality": modality,
                         "patch_filepath": str(patch_filepath),
                         "split": split,
-                        "center_coords": jittered_coord,
+                        "center_coords": coords_to_m1p1(jittered_coord, vol_size),
                         "label": 1,
                         "location": loc_row.location,
                     }
@@ -147,7 +158,7 @@ if __name__ == "__main__":
 
             ### Generate Negative patches (not near any aneurysm)
             radius_vox = PATCH_SIZE // 2
-            padding = 18.0  # mm
+            padding = 18.0  # voxels
             anerysm_vox_centers = (
                 np.array(anerysm_vox_centers)
                 if anerysm_vox_centers
@@ -163,13 +174,15 @@ if __name__ == "__main__":
                     ]
                 )
 
-                # Compute distances from this candidate center to all aneurysm centers
-                dists = np.linalg.norm(
-                    anerysm_vox_centers - np.array(patch_center), axis=1
-                )
                 # Reject candidates that are too close to any aneurysm
-                if np.any(dists < padding):
-                    continue  # too close to an aneurysm
+                if anerysm_vox_centers.shape[0] > 0:
+                    # Compute distances from this candidate center to all aneurysm centers
+                    dists = np.linalg.norm(
+                        anerysm_vox_centers - np.array(patch_center), axis=1
+                    )
+
+                    if np.any(dists < padding):
+                        continue  # too close to an aneurysm
 
                 try:
                     patch_sitk = extract_patch_sitk(sitk_img, patch_center, PATCH_SIZE)
@@ -190,7 +203,7 @@ if __name__ == "__main__":
                     "modality": modality,
                     "patch_filepath": str(patch_filepath),
                     "split": split,
-                    "center_coords": patch_center,
+                    "center_coords": coords_to_m1p1(patch_center, vol_size),
                     "label": 0,
                     "location": np.nan,
                 }
