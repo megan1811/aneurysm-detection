@@ -22,7 +22,8 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
                 - "patch": image or volume patches of shape (B, C, H, W, ...)
                 - "coords": coordinate tensor of shape (B, D_coord)
                 - "modality": modality encoding tensor of shape (B, D_mod)
-                - "y": integer class labels of shape (B,)
+                - "y": binary label aneurysm present of shape (1,)
+                - "location" (torch.Tensor, optional): Encoded anatomical location of the aneurysm of shape (1,)
         optimizer (torch.optim.Optimizer): Optimizer used to update model
             parameters.
         criterion (callable): Loss function taking (logits, targets) and
@@ -45,11 +46,12 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
         patches = batch["patch"].to(device)
         coords = batch["coords"].to(device)
         modality = batch["modality"].to(device)
-        labels = batch["y"].to(device)  # single integer class label tensor (B,)
+        # labels = batch["y"].to(device)  # single integer class label tensor (B,)
+        locations = batch["location"].to(device)
 
         optimizer.zero_grad()
         outputs = model(patches, coords, modality)  # logits (B, num_classes)
-        loss = criterion(outputs, labels.long())
+        loss = criterion(outputs, locations.long())
         loss.backward()
         optimizer.step()
 
@@ -57,7 +59,7 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
 
         preds = outputs.argmax(dim=1).cpu().numpy()
         all_preds.extend(preds)
-        all_labels.extend(labels.cpu().numpy())
+        all_labels.extend(locations.cpu().numpy())
 
     avg_loss = running_loss / len(dataloader)
     accuracy = accuracy_score(all_labels, all_preds)
@@ -100,15 +102,15 @@ def eval(model, dataloader, criterion, device):
             patches = batch["patch"].to(device)
             coords = batch["coords"].to(device)
             modality = batch["modality"].to(device)
-            labels = batch["y"].to(device)
+            locations = batch["location"].to(device)
 
             outputs = model(patches, coords, modality)
-            loss = criterion(outputs, labels.long())
+            loss = criterion(outputs, locations.long())
             running_loss += loss.item()
 
             preds = outputs.argmax(dim=1).cpu().numpy()
             all_preds.extend(preds)
-            all_labels.extend(labels.cpu().numpy())
+            all_labels.extend(locations.cpu().numpy())
 
     avg_loss = running_loss / len(dataloader)
     accuracy = accuracy_score(all_labels, all_preds)

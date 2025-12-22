@@ -63,24 +63,23 @@ class AneurysmPatchDataset(Dataset):
             dict: A dictionary containing:
                 - "patch" (torch.Tensor): 3D patch tensor of shape (1, D, H, W).
                 - "coords" (torch.Tensor): Tensor of world coordinates (3,).
-                - "modality" (torch.Tensor): Encoded modality index.
-                - "y" (torch.Tensor, optional): Location class index (train mode only).
-                - "label" (int, optional): Binary aneurysm-presence label (train mode only).
-                - "location" (str, optional): Anatomical location of the aneurysm;
-                    must be present in CAT_COLS (train mode only).
+                - "modality" (torch.Tensor): Encoded modality index (1,).
+                - "y" (torch.Tensor, optional): Binary label aneurysm present (train mode only) (1,).
+                - "location" (torch.Tensor, optional): Encoded anatomical location of the aneurysm;
+                    must be present in CAT_COLS (train mode only) (1,).
         """
         row = self.df_data.iloc[idx]
 
         patch_tensor = self.load_patch(row["patch_filepath"])
 
-        coords = ast.literal_eval(row["world_coords"].replace("np.float64", ""))
+        coords = ast.literal_eval(row["center_coords"].replace("np.float64", ""))
         coords_tensor = torch.tensor(coords, dtype=torch.float32)
 
         output = {
             "patch": patch_tensor,
             "coords": coords_tensor,  # assuming row['coords'] is iterable of length 3
             "modality": torch.tensor(
-                MODALITY_TO_INT[row["modality"]], dtype=torch.long
+                MODALITY_TO_INT[row["modality"]], dtype=torch.int64
             ),  # assuming label/int
         }
 
@@ -89,15 +88,16 @@ class AneurysmPatchDataset(Dataset):
             output = self.transform(output)
 
         if not self.test:
-            location = row["location"]
+            output["y"] = torch.tensor(row["label"], dtype=torch.int64)  # binary label
+            location = row["location"]  # None if no aneurysm present
+
             if location not in CAT_COLS:
-                output["y"] = torch.tensor(len(CAT_COLS)).long()  # no aneurysm present
+                output["location"] = torch.tensor(
+                    len(CAT_COLS)
+                ).long()  # no aneurysm present
             else:
-                output["y"] = torch.tensor(
+                output["location"] = torch.tensor(
                     CAT_COLS.index(location)
                 ).long()  # location of aneurysm
-            # output["label"] = row["label"]
-            # output["location"] = row["location"]
-        # print(output)
 
         return output

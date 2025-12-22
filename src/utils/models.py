@@ -82,16 +82,15 @@ class PatchClassifier(nn.Module):
             nn.Linear(128, num_classes),
         )
 
-    def forward(self, patch_volume, world_coords, modality_idx) -> torch.Tensor:
+    def forward(self, patch_volume, center_coords, modality_idx) -> torch.Tensor:
         """
         Forward pass of the patch classifier.
 
         Args:
             patch_volume (torch.Tensor): 3D patch tensor of shape
                 (B, 1, D, H, W), e.g. (B, 1, 32, 32, 32).
-            # TODO: normalize world coordinates in dataset preparation
-            world_coords (torch.Tensor): Tensor of shape (B, 3) containing
-                raw world coordinates (e.g., LPS) for the patch center.
+            center_coords (torch.Tensor): Tensor of shape (B, 3) containing
+                relative world coordinates (e.g., LPS) for the patch center.
             modality_idx (torch.Tensor): Tensor of shape (B,) with integer
                 modality indices (dtype torch.long).
 
@@ -104,7 +103,7 @@ class PatchClassifier(nn.Module):
         x = self.pool(x).view(x.size(0), -1)  # shape (B, C)
 
         m = self.modality_embedding(modality_idx)  # (B, 16)
-        c = self.coord_mlp(world_coords)
+        c = self.coord_mlp(center_coords)  # (B, coor_emb_dim)
 
         combined = torch.cat([x, m, c], dim=1)  # (B, decoder_input_dim)
         out = self.classifier(combined)  # (B, num_classes), raw logits
