@@ -54,19 +54,22 @@ class AneurysmPatchDataset(Dataset):
     def __getitem__(self, idx):
         """
         Retrieve a single sample consisting of a 3D patch, spatial coordinates,
-        modality metadata, and (when not in test mode) aneurysm labels.
+        modality metadata, and (when not in test mode) aneurysm targets.
 
         Args:
             idx (int): Index of the sample to load.
 
         Returns:
             dict: A dictionary containing:
-                - "patch" (torch.Tensor): 3D patch tensor of shape (1, D, H, W).
-                - "coords" (torch.Tensor): Tensor of world coordinates (3,).
-                - "modality" (torch.Tensor): Encoded modality index (1,).
-                - "y" (torch.Tensor, optional): Binary label aneurysm present (train mode only) (1,).
-                - "location" (torch.Tensor, optional): Encoded anatomical location of the aneurysm;
-                    must be present in CAT_COLS (train mode only) (1,).
+                - "patch" (torch.Tensor): 3D patch tensor of shape (1, D, H, W), dtype float32.
+                - "coords" (torch.Tensor): Patch-center coordinates of shape (3,), dtype float32
+                  (expected to be scaled to [-1, 1]).
+                - "modality" (torch.Tensor): Modality index of shape (), dtype long (for nn.Embedding).
+                - "y_pres" (torch.Tensor, optional): Presence label (0.0 or 1.0), shape (), dtype float32
+                  (for BCEWithLogitsLoss). Present only when test=False.
+                - "y_loc" (torch.Tensor, optional): Location class index in [0, 12], shape (), dtype long
+                  (for CrossEntropyLoss). Only meaningful when y_pres == 1; for y_pres == 0 it is set
+                  to a dummy value (0). Present only when test=False.
         """
         row = self.df_data.iloc[idx]
 
@@ -79,7 +82,7 @@ class AneurysmPatchDataset(Dataset):
             "patch": patch_tensor,
             "coords": coords_tensor,  # assuming row['coords'] is iterable of length 3
             "modality": torch.tensor(
-                MODALITY_TO_INT[row["modality"]], dtype=torch.int64
+                MODALITY_TO_INT[row["modality"]], dtype=torch.long
             ),  # assuming label/int
         }
 
@@ -88,16 +91,17 @@ class AneurysmPatchDataset(Dataset):
             output = self.transform(output)
 
         if not self.test:
-            output["y"] = torch.tensor(row["label"], dtype=torch.int64)  # binary label
-            location = row["location"]  # None if no aneurysm present
+            y_pres = int(row["label"])
+            output["y_pres"] = torch.tensor(y_pres, dtype=torch.float32)
 
-            if location not in CAT_COLS:
-                output["location"] = torch.tensor(
-                    len(CAT_COLS)
-                ).long()  # no aneurysm present
+            if y_pres == 1:
+                location = row["location"]
+                if location not in CAT_COLS:
+                    raise ValueError(f"Positive patch has invalid location: {location}")
+                loc_idx = CAT_COLS.index(location)
             else:
-                output["location"] = torch.tensor(
-                    CAT_COLS.index(location)
-                ).long()  # location of aneurysm
+                loc_idx = 0  # dummy value, ignored by loss via masking
+
+            output["y_loc"] = torch.tensor(loc_idx, dtype=torch.long)
 
         return output
