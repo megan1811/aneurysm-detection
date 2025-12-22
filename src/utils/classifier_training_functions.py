@@ -22,8 +22,8 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
                 - "patch": image or volume patches of shape (B, C, H, W, ...)
                 - "coords": coordinate tensor of shape (B, D_coord)
                 - "modality": modality encoding tensor of shape (B, D_mod)
-                - "y": binary label aneurysm present of shape (1,)
-                - "location" (torch.Tensor, optional): Encoded anatomical location of the aneurysm of shape (1,)
+                - "y_pres": binary label aneurysm present of shape (1,)
+                - "y_loc" (torch.Tensor, optional): Encoded anatomical location of the aneurysm of shape (1,)
         optimizer (torch.optim.Optimizer): Optimizer used to update model
             parameters.
         criterion (callable): Loss function taking (logits, targets) and
@@ -47,7 +47,7 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
         coords = batch["coords"].to(device)
         modality = batch["modality"].to(device)
         # labels = batch["y"].to(device)  # single integer class label tensor (B,)
-        locations = batch["location"].to(device)
+        locations = batch["y_loc"].to(device)
 
         optimizer.zero_grad()
         outputs = model(patches, coords, modality)  # logits (B, num_classes)
@@ -102,7 +102,7 @@ def eval(model, dataloader, criterion, device):
             patches = batch["patch"].to(device)
             coords = batch["coords"].to(device)
             modality = batch["modality"].to(device)
-            locations = batch["location"].to(device)
+            locations = batch["y_loc"].to(device)
 
             outputs = model(patches, coords, modality)
             loss = criterion(outputs, locations.long())
