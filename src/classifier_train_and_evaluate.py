@@ -16,7 +16,6 @@ from utils.classifier_training_functions import train_model, eval
 # Hyperparameters
 BATCH_SIZE = 32
 EPOCHS = 50
-# EPOCHS = 2  # For testing purposes
 LEARNING_RATE = 1e-4
 ES_PATIENCE = 5
 ES_FACTOR = 0.5
