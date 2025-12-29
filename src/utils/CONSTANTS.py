@@ -18,4 +18,5 @@ CAT_COLS = LABEL_COLS[:-1]  # all except 'Aneurysm Present'
 MODALITIES = ["MRA", "CTA", "MRI T2", "MRI T1post"]
 MODALITY_TO_INT = {mod: i for i, mod in enumerate(MODALITIES)}
 
-# Training parameters
+# Computed on patch dataset
+POS_WEIGHT = 5.75  # for handling class imbalance in aneurysm present // n_neg / n_pos

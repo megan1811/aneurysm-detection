@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 from datetime import datetime
 
-from utils.CONSTANTS import CAT_COLS, MODALITIES
+from utils.CONSTANTS import CAT_COLS, MODALITIES, POS_WEIGHT
 from utils.datasets import AneurysmPatchDataset
 from utils.models import PatchClassifier
 from utils.classifier_training_functions import train_model, eval
@@ -85,9 +85,14 @@ if __name__ == "__main__":
 
     ### Model, loss, optimizer, schedule
     classifier = PatchClassifier(
-        modality_num_classes=len(MODALITIES), num_classes=len(CAT_COLS) + 1
+        modality_num_classes=len(MODALITIES),
+        num_loc_classes=len(CAT_COLS),
     )
-    criterion = nn.CrossEntropyLoss()
+    loss_pres_fn = nn.BCEWithLogitsLoss(
+        pos_weight=torch.tensor([POS_WEIGHT], device=device)
+    )
+    loss_loc_fn = nn.CrossEntropyLoss()
+
     optimizer = optim.Adam(
         classifier.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
     )
@@ -108,7 +113,8 @@ if __name__ == "__main__":
         device=device,
         train_loader=train_loader,
         val_loader=val_loader,
-        criterion=criterion,
+        loss_pres_fn=loss_pres_fn,
+        loss_loc_fn=loss_loc_fn,
         optimizer=optimizer,
         scheduler=scheduler,
         epochs=EPOCHS,
@@ -119,11 +125,33 @@ if __name__ == "__main__":
     ### Final evaluation on test set
     # Load best model weights
     classifier.load_state_dict(model_weights)
-    _, test_acc, balanced_test_acc = eval(classifier, test_loader, criterion, device)
+    (
+        test_loss,
+        test_loss_pres,
+        test_loss_loc,
+        test_auc_pres,
+        test_loc_acc,
+        test_loc_bal_acc,
+    ) = eval(
+        classifier,
+        test_loader,
+        loss_pres_fn,
+        loss_loc_fn,
+        device,
+    )
 
     pd.DataFrame.from_dict(
-        {"accuracy": [test_acc], "balanced_accuracy": [balanced_test_acc]}
+        {
+            "loss": [test_loss],
+            "loss_pres": [test_loss_pres],
+            "loss_loc": [test_loss_loc],
+            "auc_pres": [test_auc_pres],
+            "loc_acc": [test_loc_acc],
+            "loc_bal_acc": [test_loc_bal_acc],
+        }
     ).to_csv(output_dir / "test_metrics.csv", index=False)
 
-    print(f"Test Accuracy:           {test_acc:.4f}")
-    print(f"Test Balanced Accuracy:  {balanced_test_acc:.4f}")
+    print(f"Test Loss:        {test_loss:.4f}")
+    print(f"Test AUROC:       {test_auc_pres:.4f}")
+    print(f"Test Loc Acc:     {test_loc_acc:.4f}")
+    print(f"Test Loc Bal Acc: {test_loc_bal_acc:.4f}")
