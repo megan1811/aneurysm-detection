@@ -23,21 +23,31 @@ The goal of this pipeline is to create a reliable workflow for turning raw cereb
 
 - **1. Volume Loading & Preprocessing:** Raw DICOM series are converted into 3D volumes using SimpleITK. Each scan is resampled to an isotropic voxel spacing and intensity-normalized to reduce variability across scanners and acquisition protocols.
 
-- **2. Patch Extraction:** Fixed-size 3D patches are sampled from the volume. Positive patches are centered on known aneurysm locations, while negative patches are drawn from anatomically relevant but non-aneurysmal regions. This step ensures spatial grounding and enables patch-level supervision.
+- **2. Patch Extraction:** Fixed-size 3D patches are sampled from each volume. Positive patches are centered on annotated aneurysm locations, while negative patches are drawn from non-aneurysmal regions. This step ensures spatial grounding and enables patch-level supervision.
 
-- **3. Patch-Level Classification:** Each 3D patch is passed through a CNN-based classifier that predicts whether the region contains aneurysmal tissue. Beyond binary classification, the model also estimates the **vascular territory** associated with a positive patch. To support this spatial reasoning, the classifier incorporates auxiliary inputs such as the **world-coordinate center** of the patch and the **scan modality** (e.g., CTA, MRA), allowing it to contextualize each patch within the cerebrovascular anatomy.
+- **3. Patch-Level Classification:** Each patch is processed by a 3D CNN that predicts (1) whether an aneurysm is present and, if so, (2) the associated intracranial vascular territory. In addition to image data, the model consumes auxiliary metadata — the **normalized patch center coordinates**(scaled relative to the scan volume) and the **scan modality** — to provide spatial and acquisition context.
 
 ## 🧠 Model Architecture
 
-The patch classifier combines a pretrained 3D convolutional backbone with lightweight metadata embeddings to produce aneurysm-related predictions:
+The patch classifier is a two-head model built on top of a pretrained 3D convolutional backbone:
 
-**3D Patch → MedicalNet 3D CNN → Feature Fusion (modality + coordinates) → Classification Head**
+**3D Patch → MedicalNet 3D CNN → Feature Fusion → Presence Head + Location Head**
 
-Key features:
+Key Components:
 
-- Uses a [**MedicalNet 3D ResNet**](https://github.com/Warvito/MedicalNet-models) backbone pretrained on large medical-imaging corpora for robust volumetric feature extraction.
-- Incorporates **world-coordinate embeddings** and **modality embeddings** to provide anatomical and acquisition context.
-- Produces a **multi-class prediction**, covering aneurysm presence as well as the vascular territory associated with a positive patch.
+- A [**MedicalNet 3D ResNet**](https://github.com/Warvito/MedicalNet-models)
+  backbone extracts volumetric features from each patch.
+- Patch features are fused with learned embeddings of the **scan modality**, and the normalized **3D patch center coordinates**.
+- The fused representation feeds two prediction heads (1) a **binary presence head** (aneurysm vs. no aneurysm) and (2) a **multiclass location head** predicting one of 13 vascular territories.
+
+During training, the location head is optimized only on positive patches via masking, while the presence head is trained on all samples. The relative contribution of the location loss is controlled by a weighting factor (alpha_loc).
+
+## 📊 Metrics
+
+For the moment, all metrics are computed at the patch level and reflect the two prediction tasks:
+
+- **Presence:** AUROC over all patches, chosen to handle strong class imbalance.
+- **Location:** Accuracy and balanced accuracy over the 13 vascular territories, computed only on positive patches.
 
 ## 📂 Project Structure
 
