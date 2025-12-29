@@ -301,13 +301,13 @@ def train_model(
         print(
             f"Train | Loss: {train_loss:.4f} "
             f"(Pres: {train_loss_pres:.4f}, Loc: {train_loss_loc:.4f}) | "
-            f"AUC: {train_auc_pres:.4f} | "
+            f"AUC Pres: {train_auc_pres:.4f} | "
             f"Loc Acc: {train_loc_acc:.4f}"
         )
         print(
             f"Val   | Loss: {val_loss:.4f} "
             f"(Pres: {val_loss_pres:.4f}, Loc: {val_loss_loc:.4f}) | "
-            f"AUC: {val_auc_pres:.4f} | "
+            f"AUC Pres: {val_auc_pres:.4f} | "
             f"Loc Acc: {val_loc_acc:.4f}"
         )
 
