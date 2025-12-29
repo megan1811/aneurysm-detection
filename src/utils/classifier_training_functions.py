@@ -1,121 +1,195 @@
 from tqdm import tqdm
-from sklearn.metrics import accuracy_score, balanced_accuracy_score
+from sklearn.metrics import roc_auc_score, accuracy_score, balanced_accuracy_score
 import torch
 import copy
 import pandas as pd
 
 
-def train_epoch(model, dataloader, optimizer, criterion, device):
+def train_epoch(model, dataloader, optimizer, loss_pres_fn, loss_loc_fn, device):
     """
-    Run a single training epoch for the patch classifier.
+    Run a single training epoch for the two-head patch classifier.
 
-    Iterates once over the training dataloader, performs forward and backward
-    passes, updates the model parameters, and computes both standard and
-    balanced accuracy over the epoch.
+    Performs a single pass over the training dataloader, updates model weights,
+    and computes patch-level metrics. The presence head is trained on all samples,
+    while the location head is trained only on positive patches via masking.
 
     Args:
-        model (torch.nn.Module): Patch-level classification model. Expected
-            forward signature: ``model(patches, coords, modality)`` returning
-            logits of shape (B, num_classes).
-        dataloader (torch.utils.data.DataLoader): Dataloader yielding batches
-            of dictionaries with keys:
-                - "patch": image or volume patches of shape (B, C, H, W, ...)
-                - "coords": coordinate tensor of shape (B, D_coord)
-                - "modality": modality encoding tensor of shape (B, D_mod)
-                - "y_pres": binary label aneurysm present of shape (1,)
-                - "y_loc" (torch.Tensor, optional): Encoded anatomical location of the aneurysm of shape (1,)
-        optimizer (torch.optim.Optimizer): Optimizer used to update model
-            parameters.
-        criterion (callable): Loss function taking (logits, targets) and
-            returning a scalar loss, e.g. ``nn.CrossEntropyLoss``.
-        device (torch.device): Device on which computations are performed.
+        model (torch.nn.Module): Patch classifier returning
+            (pres_logits: (B,), loc_logits: (B, num_loc_classes)).
+        dataloader (DataLoader): Training dataloader yielding patch batches.
+        optimizer (torch.optim.Optimizer): Optimizer.
+        loss_pres_fn (callable): Presence loss (e.g. BCEWithLogitsLoss).
+        loss_loc_fn (callable): Location loss (e.g. CrossEntropyLoss).
+        device (torch.device): Compute device.
 
     Returns:
-        tuple[float, float, float]:
-            - avg_loss: Average training loss over the epoch.
-            - accuracy: Standard accuracy over all training samples.
-            - balanced_accuracy: Balanced accuracy (macro recall) over
-              all training samples.
+        tuple:
+            avg_loss (float): Mean total loss over the epoch.
+            avg_loss_pres (float): Mean presence loss.
+            avg_loss_loc (float): Mean location loss (positives only).
+            auc_pres (float): Presence AUROC.
+            loc_acc (float): Location accuracy on positives.
+            loc_bal_acc (float): Balanced location accuracy on positives.
     """
     model.train()
+
     running_loss = 0.0
-    all_preds = []
-    all_labels = []
+    running_loss_pres = 0.0
+    running_loss_loc = 0.0
+
+    all_preds_pres = []
+    all_labels_pres = []
+
+    all_preds_loc = []
+    all_labels_loc = []
 
     for batch in tqdm(dataloader, desc="Training"):
         patches = batch["patch"].to(device)
         coords = batch["coords"].to(device)
         modality = batch["modality"].to(device)
-        # labels = batch["y"].to(device)  # single integer class label tensor (B,)
-        locations = batch["y_loc"].to(device)
 
-        optimizer.zero_grad()
-        outputs = model(patches, coords, modality)  # logits (B, num_classes)
-        loss = criterion(outputs, locations.long())
+        y_pres = batch["y_pres"].to(device)  # float32 (B,)
+        y_loc = batch["y_loc"].to(device)  # long (B,)
+
+        optimizer.zero_grad(set_to_none=True)
+
+        pres_logits, loc_logits = model(patches, coords, modality)
+
+        loss_pres = loss_pres_fn(pres_logits.view(-1), y_pres.view(-1))
+
+        pos_mask = y_pres.view(-1) == 1
+        if pos_mask.any():
+            loss_loc = loss_loc_fn(loc_logits[pos_mask], y_loc[pos_mask])
+        else:
+            loss_loc = torch.tensor(0.0, device=device)
+
+        loss = loss_pres + loss_loc
+
         loss.backward()
         optimizer.step()
 
         running_loss += loss.item()
+        running_loss_pres += loss_pres.item()
+        running_loss_loc += loss_loc.item()
 
-        preds = outputs.argmax(dim=1).cpu().numpy()
-        all_preds.extend(preds)
-        all_labels.extend(locations.cpu().numpy())
+        # Metrics accumulation
+        p_pres = torch.sigmoid(pres_logits).detach().cpu().numpy()
+        all_preds_pres.extend(p_pres.tolist())
+        all_labels_pres.extend(y_pres.detach().cpu().numpy().astype(int).tolist())
+
+        if pos_mask.any():
+            preds_loc = loc_logits[pos_mask].argmax(dim=1).detach().cpu().numpy()
+            all_preds_loc.extend(preds_loc.tolist())
+            all_labels_loc.extend(y_loc[pos_mask].detach().cpu().numpy().tolist())
 
     avg_loss = running_loss / len(dataloader)
-    accuracy = accuracy_score(all_labels, all_preds)
-    balanced_accuracy = balanced_accuracy_score(all_labels, all_preds)
-    return avg_loss, accuracy, balanced_accuracy
+    avg_loss_pres = running_loss_pres / len(dataloader)
+    avg_loss_loc = running_loss_loc / len(dataloader)
+
+    # Presence AUROC
+    try:
+        auc_pres = roc_auc_score(all_labels_pres, all_preds_pres)
+    except ValueError:
+        auc_pres = float("nan")
+
+    # Location metrics (positives only)
+    if len(all_labels_loc) > 0:
+        loc_acc = accuracy_score(all_labels_loc, all_preds_loc)
+        loc_bal_acc = balanced_accuracy_score(all_labels_loc, all_preds_loc)
+    else:
+        loc_acc = float("nan")
+        loc_bal_acc = float("nan")
+
+    return avg_loss, avg_loss_pres, avg_loss_loc, auc_pres, loc_acc, loc_bal_acc
 
 
-def eval(model, dataloader, criterion, device):
+def eval(model, dataloader, loss_pres_fn, loss_loc_fn, device):
     """
-    Run evaluation on dataloader for the patch classifier.
+    Evaluate the two-head patch classifier on a dataset split.
+
+    Runs a forward-only pass over the dataloader and computes the same losses
+    and metrics as in training. Location loss and metrics are computed only
+    on positive patches via masking.
 
     Args:
-        model (torch.nn.Module): Patch-level classification model in evaluation
-            mode. Expected forward signature: ``model(patches, coords, modality)``
-            returning logits of shape (B, num_classes).
-        dataloader (torch.utils.data.DataLoader): Dataloader yielding batches
-            of dictionaries with keys:
-                - "patch": image or volume patches of shape (B, C, H, W, ...)
-                - "coords": coordinate tensor of shape (B, D_coord)
-                - "modality": modality encoding tensor of shape (B, D_mod)
-                - "y": integer class labels of shape (B,)
-        criterion (callable): Loss function taking (logits, targets) and
-            returning a scalar loss.
-        device (torch.device): Device on which computations are performed.
+        model (torch.nn.Module): Patch classifier returning
+            (pres_logits, loc_logits).
+        dataloader (DataLoader): Validation or test dataloader.
+        loss_pres_fn (callable): Presence loss.
+        loss_loc_fn (callable): Location loss.
+        device (torch.device): Compute device.
 
     Returns:
-        tuple[float, float, float]:
-            - avg_loss: Average evaluation loss over the epoch.
-            - accuracy: Standard accuracy over all evaluation samples.
-            - balanced_accuracy: Balanced accuracy (macro recall) over
-              all evaluation samples.
+        tuple:
+            avg_loss (float): Mean total evaluation loss.
+            avg_loss_pres (float): Mean presence loss.
+            avg_loss_loc (float): Mean location loss (positives only).
+            auc_pres (float): Presence AUROC.
+            loc_acc (float): Location accuracy on positives.
+            loc_bal_acc (float): Balanced location accuracy on positives.
     """
     model.eval()
     running_loss = 0.0
-    all_preds = []
-    all_labels = []
+    running_loss_pres = 0.0
+    running_loss_loc = 0.0
+
+    all_preds_pres = []
+    all_labels_pres = []
+
+    all_preds_loc = []
+    all_labels_loc = []
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating"):
             patches = batch["patch"].to(device)
             coords = batch["coords"].to(device)
             modality = batch["modality"].to(device)
-            locations = batch["y_loc"].to(device)
 
-            outputs = model(patches, coords, modality)
-            loss = criterion(outputs, locations.long())
+            y_pres = batch["y_pres"].to(device)
+            y_loc = batch["y_loc"].to(device)
+
+            pres_logits, loc_logits = model(patches, coords, modality)
+
+            loss_pres = loss_pres_fn(pres_logits.view(-1), y_pres.view(-1))
+
+            pos_mask = y_pres.view(-1) == 1
+            if pos_mask.any():
+                loss_loc = loss_loc_fn(loc_logits[pos_mask], y_loc[pos_mask])
+            else:
+                loss_loc = torch.tensor(0.0, device=device)
+
+            loss = loss_pres + loss_loc
+
             running_loss += loss.item()
+            running_loss_pres += loss_pres.item()
+            running_loss_loc += loss_loc.item()
 
-            preds = outputs.argmax(dim=1).cpu().numpy()
-            all_preds.extend(preds)
-            all_labels.extend(locations.cpu().numpy())
+            p_pres = torch.sigmoid(pres_logits).cpu().numpy()
+            all_preds_pres.extend(p_pres.tolist())
+            all_labels_pres.extend(y_pres.cpu().numpy().astype(int).tolist())
+
+            if pos_mask.any():
+                preds_loc = loc_logits[pos_mask].argmax(dim=1).cpu().numpy()
+                all_preds_loc.extend(preds_loc.tolist())
+                all_labels_loc.extend(y_loc[pos_mask].cpu().numpy().tolist())
 
     avg_loss = running_loss / len(dataloader)
-    accuracy = accuracy_score(all_labels, all_preds)
-    balanced_accuracy = balanced_accuracy_score(all_labels, all_preds)
-    return avg_loss, accuracy, balanced_accuracy
+    avg_loss_pres = running_loss_pres / len(dataloader)
+    avg_loss_loc = running_loss_loc / len(dataloader)
+
+    try:
+        auc_pres = roc_auc_score(all_labels_pres, all_preds_pres)
+    except ValueError:
+        auc_pres = float("nan")
+
+    if len(all_labels_loc) > 0:
+        loc_acc = accuracy_score(all_labels_loc, all_preds_loc)
+        loc_bal_acc = balanced_accuracy_score(all_labels_loc, all_preds_loc)
+    else:
+        loc_acc = float("nan")
+        loc_bal_acc = float("nan")
+
+    return avg_loss, avg_loss_pres, avg_loss_loc, auc_pres, loc_acc, loc_bal_acc
 
 
 def train_model(
@@ -123,7 +197,8 @@ def train_model(
     device,
     train_loader,
     val_loader,
-    criterion,
+    loss_pres_fn,
+    loss_loc_fn,
     optimizer,
     scheduler,
     epochs,
@@ -131,87 +206,118 @@ def train_model(
     output_dir,
 ):
     """
-    Train the patch classifier model with early stopping and checkpointing.
+    Train a two-head patch classifier with early stopping and checkpointing.
 
-    Runs a training loop over multiple epochs, evaluating on a validation set
-    after each epoch. Tracks the best validation accuracy, performs early
-    stopping based on lack of improvement, and saves model weights and
-    training metrics to disk whenever a new best model is found.
+    The model jointly optimizes:
+      - a binary presence head (aneurysm present vs not)
+      - a multiclass location head (anatomical location), trained only on
+        positive samples via masking.
+
+    Training and validation metrics are computed at the patch level:
+      - Presence: AUROC
+      - Location: accuracy and balanced accuracy on positive patches only
+
+    The best model is selected based on minimum validation total loss
+    (presence loss + location loss).
 
     Args:
-        model (torch.nn.Module): Patch-level classification model to train.
-        device (torch.device): Device on which computations are performed.
-        train_loader (torch.utils.data.DataLoader): Dataloader for the
-            training set.
-        val_loader (torch.utils.data.DataLoader): Dataloader for the
-            validation set.
-        criterion (callable): Loss function taking (logits, targets) and
-            returning a scalar loss.
-        optimizer (torch.optim.Optimizer): Optimizer used to update model
-            parameters.
-        scheduler (torch.optim.lr_scheduler._LRScheduler or
-                   torch.optim.lr_scheduler.ReduceLROnPlateau): Learning-rate
-            scheduler. Expected to be called as ``scheduler.step(val_loss)``.
-        epochs (int): Maximum number of training epochs.
-        patience (int): Number of consecutive epochs without improvement in
-            validation accuracy before triggering early stopping.
-        output_dir (pathlib.Path): Directory where model weights and metrics
-            CSV will be saved. The best weights are stored as
-            ``output_dir / "weights.pth"`` and metrics as
-            ``output_dir / "training_metrics.csv"``.
+        model (torch.nn.Module): Patch classifier returning
+            (pres_logits, loc_logits).
+        device (torch.device): Compute device.
+        train_loader (DataLoader): Training dataloader.
+        val_loader (DataLoader): Validation dataloader.
+        loss_pres_fn (callable): Presence loss.
+        loss_loc_fn (callable): Location loss.
+        optimizer (torch.optim.Optimizer): Optimizer.
+        scheduler (torch.optim.lr_scheduler): LR scheduler stepped on val loss.
+        epochs (int): Max number of epochs.
+        patience (int): Early stopping patience.
+        output_dir (Path): Directory for checkpoints and metrics.
 
     Returns:
-        tuple[dict, list[dict]]:
-            - best_model_wts: State dict corresponding to the best validation
-              accuracy encountered during training.
-            - metrics: List of metric dictionaries, one per epoch, containing:
-                - "epoch"
-                - "train_loss", "train_acc", "train_balanced_acc"
-                - "val_loss", "val_acc", "val_balanced_acc"
+        tuple:
+            - best_model_wts (dict): State dict of the best-performing model.
+            - metrics (list[dict]): Per-epoch training and validation metrics.
     """
     model.to(device)
 
     best_model_wts = copy.deepcopy(model.state_dict())
-    best_val_acc = 0.0
+    best_val_loss = float("inf")
     epochs_since_best = 0
     metrics = []
 
     for epoch in range(epochs):
-        train_loss, train_acc, train_bal_acc = train_epoch(
-            model, train_loader, optimizer, criterion, device
+        (
+            train_loss,
+            train_loss_pres,
+            train_loss_loc,
+            train_auc_pres,
+            train_loc_acc,
+            train_loc_bal_acc,
+        ) = train_epoch(
+            model,
+            train_loader,
+            optimizer,
+            loss_pres_fn,
+            loss_loc_fn,
+            device,
         )
-        val_loss, val_acc, val_bal_acc = eval(model, val_loader, criterion, device)
 
+        (
+            val_loss,
+            val_loss_pres,
+            val_loss_loc,
+            val_auc_pres,
+            val_loc_acc,
+            val_loc_bal_acc,
+        ) = eval(
+            model,
+            val_loader,
+            loss_pres_fn,
+            loss_loc_fn,
+            device,
+        )
         metrics.append(
             {
                 "epoch": epoch + 1,
                 "train_loss": train_loss,
-                "train_acc": train_acc,
-                "train_balanced_acc": train_bal_acc,
+                "train_loss_pres": train_loss_pres,
+                "train_loss_loc": train_loss_loc,
+                "train_auc_pres": train_auc_pres,
+                "train_loc_acc": train_loc_acc,
+                "train_loc_bal_acc": train_loc_bal_acc,
                 "val_loss": val_loss,
-                "val_acc": val_acc,
-                "val_balanced_acc": val_bal_acc,
+                "val_loss_pres": val_loss_pres,
+                "val_loss_loc": val_loss_loc,
+                "val_auc_pres": val_auc_pres,
+                "val_loc_acc": val_loc_acc,
+                "val_loc_bal_acc": val_loc_bal_acc,
             }
         )
 
         scheduler.step(val_loss)
 
-        print(f"Epoch {epoch+1}/{epochs}")
+        print(f"\nEpoch {epoch + 1}/{epochs}")
         print(
-            f"Train Loss: {train_loss:.4f} | Train Accuracy: {train_acc:.4f} | Train Balanced Acc: {train_bal_acc:.4f}"
+            f"Train | Loss: {train_loss:.4f} "
+            f"(Pres: {train_loss_pres:.4f}, Loc: {train_loss_loc:.4f}) | "
+            f"AUC: {train_auc_pres:.4f} | "
+            f"Loc Acc: {train_loc_acc:.4f}"
         )
         print(
-            f"Val   Loss: {val_loss:.4f} | Val   Accuracy: {val_acc:.4f} | Val  Balanced Acc: {val_bal_acc:.4f}"
+            f"Val   | Loss: {val_loss:.4f} "
+            f"(Pres: {val_loss_pres:.4f}, Loc: {val_loss_loc:.4f}) | "
+            f"AUC: {val_auc_pres:.4f} | "
+            f"Loc Acc: {val_loc_acc:.4f}"
         )
 
         # save trainign metrics to csv
         pd.DataFrame(metrics).to_csv(output_dir / "training_metrics.csv", index=False)
 
-        # Check for improvement and save best model
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        # Checkpoint and save best model
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             best_model_wts = copy.deepcopy(model.state_dict())
-            # better save path
             torch.save(model.state_dict(), output_dir / "weights.pth")
             print("model saved.")
             epochs_since_best = 0
@@ -220,7 +326,7 @@ def train_model(
 
         # Early stopping
         if epochs_since_best >= patience:
-            print(f"Early stopping after {epoch+1} epochs.")
+            print(f"Early stopping after {epoch + 1} epochs.")
             break
 
     return best_model_wts, metrics
