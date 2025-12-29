@@ -5,7 +5,15 @@ import copy
 import pandas as pd
 
 
-def train_epoch(model, dataloader, optimizer, loss_pres_fn, loss_loc_fn, device):
+def train_epoch(
+    model,
+    dataloader,
+    optimizer,
+    loss_pres_fn,
+    loss_loc_fn,
+    device,
+    alpha_loc: float = 1.0,
+):
     """
     Run a single training epoch for the two-head patch classifier.
 
@@ -21,6 +29,7 @@ def train_epoch(model, dataloader, optimizer, loss_pres_fn, loss_loc_fn, device)
         loss_pres_fn (callable): Presence loss (e.g. BCEWithLogitsLoss).
         loss_loc_fn (callable): Location loss (e.g. CrossEntropyLoss).
         device (torch.device): Compute device.
+        alpha_loc (float): Weight applied to the location loss term. Defaults to 1.0.
 
     Returns:
         tuple:
@@ -63,7 +72,7 @@ def train_epoch(model, dataloader, optimizer, loss_pres_fn, loss_loc_fn, device)
         else:
             loss_loc = torch.tensor(0.0, device=device)
 
-        loss = loss_pres + loss_loc
+        loss = loss_pres + alpha_loc * loss_loc
 
         loss.backward()
         optimizer.step()
@@ -103,7 +112,7 @@ def train_epoch(model, dataloader, optimizer, loss_pres_fn, loss_loc_fn, device)
     return avg_loss, avg_loss_pres, avg_loss_loc, auc_pres, loc_acc, loc_bal_acc
 
 
-def eval(model, dataloader, loss_pres_fn, loss_loc_fn, device):
+def eval(model, dataloader, loss_pres_fn, loss_loc_fn, device, alpha_loc: float = 1.0):
     """
     Evaluate the two-head patch classifier on a dataset split.
 
@@ -118,6 +127,7 @@ def eval(model, dataloader, loss_pres_fn, loss_loc_fn, device):
         loss_pres_fn (callable): Presence loss.
         loss_loc_fn (callable): Location loss.
         device (torch.device): Compute device.
+        alpha_loc (float): Weight applied to the location loss term. Defaults to 1.0.
 
     Returns:
         tuple:
@@ -158,7 +168,7 @@ def eval(model, dataloader, loss_pres_fn, loss_loc_fn, device):
             else:
                 loss_loc = torch.tensor(0.0, device=device)
 
-            loss = loss_pres + loss_loc
+            loss = loss_pres + alpha_loc * loss_loc
 
             running_loss += loss.item()
             running_loss_pres += loss_pres.item()
@@ -204,6 +214,7 @@ def train_model(
     epochs,
     patience,
     output_dir,
+    alpha_loc: float = 1.0,
 ):
     """
     Train a two-head patch classifier with early stopping and checkpointing.
@@ -233,6 +244,7 @@ def train_model(
         epochs (int): Max number of epochs.
         patience (int): Early stopping patience.
         output_dir (Path): Directory for checkpoints and metrics.
+        alpha_loc (float): Weight applied to the location loss term. Defaults to 1.0.
 
     Returns:
         tuple:
@@ -261,6 +273,7 @@ def train_model(
             loss_pres_fn,
             loss_loc_fn,
             device,
+            alpha_loc=alpha_loc,
         )
 
         (
@@ -276,6 +289,7 @@ def train_model(
             loss_pres_fn,
             loss_loc_fn,
             device,
+            alpha_loc=alpha_loc,
         )
         metrics.append(
             {

@@ -20,7 +20,7 @@ LEARNING_RATE = 1e-4
 ES_PATIENCE = 5
 ES_FACTOR = 0.5
 WEIGHT_DECAY = 1e-5
-
+ALPHA_LOC = 0.7  # weight for location loss
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -120,6 +120,7 @@ if __name__ == "__main__":
         epochs=EPOCHS,
         patience=ES_PATIENCE,
         output_dir=output_dir,
+        alpha_loc=ALPHA_LOC,
     )
 
     ### Final evaluation on test set
