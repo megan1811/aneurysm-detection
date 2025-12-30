@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 from datetime import datetime
 
-from utils.CONSTANTS import CAT_COLS, MODALITIES, POS_WEIGHT
+from utils.CONSTANTS import CAT_COLS, MODALITIES, POS_WEIGHT, CLASS_WEIGHTS
 from utils.datasets import AneurysmPatchDataset
 from utils.models import PatchClassifier
 from utils.classifier_training_functions import train_model, eval
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     loss_pres_fn = nn.BCEWithLogitsLoss(
         pos_weight=torch.tensor([POS_WEIGHT], device=device)
     )
-    loss_loc_fn = nn.CrossEntropyLoss()
+    loss_loc_fn = nn.CrossEntropyLoss(weight=torch.tensor(CLASS_WEIGHTS, device=device))
 
     optimizer = optim.Adam(
         classifier.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
