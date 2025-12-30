@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 import numpy as np
+from scipy.ndimage import zoom
 import concurrent.futures
 import uuid
 
@@ -17,9 +18,45 @@ from utils.preprocess import (
 
 # Patch extraction parameters
 PATCH_SIZE = 64
+PATCH_SIZE_OUTPUT = 32
 POS_SAMPLES = 5
 NEG_SAMPES = 15
 MAX_JITTER = int(PATCH_SIZE * 0.3)
+
+
+def downsample_patch(patch_np: np.array) -> np.array:
+    """
+    Downsample a 3D patch to a fixed output shape using trilinear interpolation.
+
+    Args:
+        patch_np (np.ndarray): Input 3D patch as a NumPy array of shape
+            (D, H, W), typically representing a volumetric image patch.
+
+    Returns:
+        np.ndarray: Downsampled 3D patch of shape PATCH_SIZE_OUTPUT^3
+    """
+    target_shape = (PATCH_SIZE_OUTPUT, PATCH_SIZE_OUTPUT, PATCH_SIZE_OUTPUT)
+    if patch_np.shape == target_shape:
+        return patch_np
+
+    zoom_factors = [target_shape[i] / patch_np.shape[i] for i in range(3)]
+
+    patch_ds = zoom(
+        patch_np, zoom=zoom_factors, order=1  # order=1 = linear interpolation
+    )
+
+    # Handle any rounding issues from zoom
+    patch_ds = patch_ds[: target_shape[0], : target_shape[1], : target_shape[2]]
+    if patch_ds.shape != target_shape:
+        padded = np.zeros(target_shape, dtype=patch_ds.dtype)
+        padded[
+            : patch_ds.shape[0],
+            : patch_ds.shape[1],
+            : patch_ds.shape[2],
+        ] = patch_ds
+        patch_ds = padded
+
+    return patch_ds.astype(np.float32)
 
 
 def save_patch(patch_np: np.array, patch_filepath: Path):
@@ -30,6 +67,7 @@ def save_patch(patch_np: np.array, patch_filepath: Path):
         patch_np (np.ndarray): Patch data as a NumPy array.
         patch_filepath (str or pathlib.Path): Destination file path.
     """
+    patch_np = downsample_patch(patch_np)
     np.savez_compressed(patch_filepath, patch=patch_np)
 
 
