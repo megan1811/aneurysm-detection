@@ -316,13 +316,15 @@ def train_model(
             f"Train | Loss: {train_loss:.4f} "
             f"(Pres: {train_loss_pres:.4f}, Loc: {train_loss_loc:.4f}) | "
             f"AUC Pres: {train_auc_pres:.4f} | "
-            f"Loc Acc: {train_loc_acc:.4f}"
+            f"Loc Acc: {train_loc_acc:.4f} |"
+            f"Loc Bal Acc: {train_loc_bal_acc:.4f} |"
         )
         print(
             f"Val   | Loss: {val_loss:.4f} "
             f"(Pres: {val_loss_pres:.4f}, Loc: {val_loss_loc:.4f}) | "
             f"AUC Pres: {val_auc_pres:.4f} | "
-            f"Loc Acc: {val_loc_acc:.4f}"
+            f"Loc Acc: {val_loc_acc:.4f} | "
+            f"Loc Bal Acc: {val_loc_bal_acc:.4f}"
         )
 
         # save trainign metrics to csv
