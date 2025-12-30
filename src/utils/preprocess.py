@@ -183,7 +183,7 @@ def load_and_preprocess(series_id: str, modality: str, base_dir: Path) -> SITKIm
     Returns:
         SITKImage: The fully preprocessed 3D image.
     """
-    series_path = base_dir / "series" / series_id
+    series_path = base_dir / series_id
     if not series_path.exists():
         raise FileNotFoundError(f"Series path {series_path} does not exist.")
 

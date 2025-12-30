@@ -16,10 +16,10 @@ from utils.preprocess import (
 )
 
 # Patch extraction parameters
-PATCH_SIZE = 32
+PATCH_SIZE = 64
 POS_SAMPLES = 5
 NEG_SAMPES = 15
-MAX_JITTER = 10
+MAX_JITTER = int(PATCH_SIZE * 0.3)
 
 
 def save_patch(patch_np: np.array, patch_filepath: Path):
@@ -37,10 +37,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("series_dir", type=Path, help="Path to series folder")
     parser.add_argument("data_dir", type=Path, help="Path to data folder")
+    parser.add_argument(
+        "patches_dir_name", type=str, help="Name of patches folder to create"
+    )
     args = parser.parse_args()
 
     ### Paths and metadata setup
-    patch_dir = args.data_dir / "patches"
+    patch_dir = args.data_dir / args.patches_dir_name
     patch_metadata_path = patch_dir / "patches_metadata.csv"
 
     ### Read in series and localization data
@@ -158,7 +161,7 @@ if __name__ == "__main__":
 
             ### Generate Negative patches (not near any aneurysm)
             radius_vox = PATCH_SIZE // 2
-            padding = 18.0  # voxels
+            padding = int(0.6 * PATCH_SIZE)  # min distance from aneurysm center
             anerysm_vox_centers = (
                 np.array(anerysm_vox_centers)
                 if anerysm_vox_centers
