@@ -8,10 +8,11 @@ import torch.nn as nn
 import torch.optim as optim
 from datetime import datetime
 
-from utils.CONSTANTS import CAT_COLS, MODALITIES, POS_WEIGHT, CLASS_WEIGHTS
+from utils.CONSTANTS import CAT_COLS, MODALITIES
 from utils.datasets import AneurysmPatchDataset
 from utils.models import PatchClassifier
 from utils.classifier_training_functions import train_model, eval
+from utils.metrics import compute_patches_dataset_metrics
 
 # Hyperparameters
 BATCH_SIZE = 32
@@ -37,6 +38,7 @@ if __name__ == "__main__":
 
     ### Load patches data
     df_data = pd.read_csv(args.patches_dir / "patches_metadata.csv")
+    dataset_metrics = compute_patches_dataset_metrics(df_data)
 
     # Optional debugging
     # df_data = df_data.sample(frac=0.01, random_state=42).reset_index(drop=True)
@@ -89,9 +91,11 @@ if __name__ == "__main__":
         num_loc_classes=len(CAT_COLS),
     )
     loss_pres_fn = nn.BCEWithLogitsLoss(
-        pos_weight=torch.tensor([POS_WEIGHT], device=device)
+        pos_weight=torch.tensor([dataset_metrics["pos_weight"]], device=device)
     )
-    loss_loc_fn = nn.CrossEntropyLoss(weight=torch.tensor(CLASS_WEIGHTS, device=device))
+    loss_loc_fn = nn.CrossEntropyLoss(
+        weight=torch.tensor(dataset_metrics["location_class_weights"], device=device)
+    )
 
     optimizer = optim.Adam(
         classifier.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
