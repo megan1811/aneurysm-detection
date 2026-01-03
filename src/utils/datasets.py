@@ -3,6 +3,8 @@ from torch.utils.data import Dataset
 import pandas as pd
 import numpy as np
 import ast
+from pathlib import Path
+
 
 from utils.CONSTANTS import MODALITY_TO_INT, CAT_COLS
 
@@ -105,3 +107,49 @@ class AneurysmPatchDataset(Dataset):
             output["y_loc"] = torch.tensor(loc_idx, dtype=torch.long)
 
         return output
+
+
+class ScanDataset(Dataset):
+    """
+    Dataset for scan-level aggregation.
+
+    One item corresponds to one scan (.npz file) and contains
+    variable-length patch-level outputs + fixed scan-level labels.
+    """
+
+    def __init__(self, scan_files: list[Path]):
+        """
+        Args:
+            scan_files (list): List of paths to .npz files.
+        """
+        self.scan_files = scan_files
+
+    def __len__(self):
+        return len(self.scan_files)
+
+    def __getitem__(self, idx):
+        scan_path = self.scan_files[idx]
+        data = np.load(scan_path, allow_pickle=True)
+
+        # Patch-level data (variable length)
+        centers_norm = torch.from_numpy(data["centers_norm"]).float()  # (N, 3)
+        presence_logits = torch.from_numpy(data["presence_logits"]).float()  # (N,)
+        location_logits = torch.from_numpy(data["location_logits"]).float()  # (N, 13)
+        embeddings = torch.from_numpy(data["embeddings"]).float()  # (N, D)
+
+        # Scan-level labels
+        y = torch.from_numpy(data["y"]).float()  # (14,)
+
+        # Metadata (keep as Python types)
+        series_id = str(data["series_id"])
+        modality = int(data["modality"])
+
+        return {
+            "presence_logits": presence_logits,
+            "location_logits": location_logits,
+            "embeddings": embeddings,
+            "centers_norm": centers_norm,
+            "y": y,
+            "series_id": series_id,
+            "modality": modality,
+        }
