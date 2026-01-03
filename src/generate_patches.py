@@ -199,7 +199,21 @@ if __name__ == "__main__":
 
             ### Generate Negative patches (not near any aneurysm)
             radius_vox = PATCH_SIZE // 2
-            padding = int(0.6 * PATCH_SIZE)  # min distance from aneurysm center
+            padding = int(0.6 * PATCH_SIZE)
+
+            # Guard: ensure there is room to sample negative patch centers
+            if any(vol_size[d] <= 2 * radius_vox for d in range(3)):
+                print(
+                    f"Series {series_id}: volume too small for negative sampling "
+                    f"(size={vol_size}, patch={PATCH_SIZE}). Skipping negatives."
+                )
+                anerysm_vox_centers = (
+                    np.array(anerysm_vox_centers)
+                    if anerysm_vox_centers
+                    else np.empty((0, 3))
+                )
+                continue  # skips negative sampling for this series
+
             anerysm_vox_centers = (
                 np.array(anerysm_vox_centers)
                 if anerysm_vox_centers
