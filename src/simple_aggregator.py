@@ -1,19 +1,13 @@
 import argparse
-from pathlib import Path
-from utils.datasets import ScanDataset
-import torch
 import numpy as np
-from scipy.special import expit  # sigmoid
+from pathlib import Path
+from tqdm import tqdm
+from functools import partial
+from scipy.special import expit, logsumexp
 from sklearn.metrics import roc_auc_score
+
 from utils.datasets import ScanDataset
 from utils.CONSTANTS import LABEL_COLS
-import numpy as np
-from scipy.special import expit  # sigmoid
-from tqdm import tqdm
-
-from functools import partial
-import numpy as np
-from scipy.special import expit, logsumexp
 
 
 def aggregate_scan_lse(item: dict, tau: float = 1.0) -> np.ndarray:
@@ -91,11 +85,11 @@ def aggregate_scan_topk(item: dict, k: int = 3) -> np.ndarray:
     return y_hat
 
 
-def evaluate_dataset(
+def run_aggregator(
     dataset: ScanDataset, aggregate_scan: callable
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Run max-aggregation over a dataset and collect predictions / targets.
+    Run scan-level aggregation over a dataset and collect predictions / targets.
     """
     y_true = []
     y_pred = []
@@ -190,8 +184,8 @@ if __name__ == "__main__":
 
     scan_dataset = ScanDataset(scan_files)
 
-    print("\nEvaluating dataset...")
-    y_true, y_pred = evaluate_dataset(scan_dataset, aggregate_scan)
+    print("\nAggregating scan-level predictions & evaluating output...")
+    y_true, y_pred = run_aggregator(scan_dataset, aggregate_scan)
     score, aucs = mean_weighted_columnwise_auc(y_true, y_pred)
     print(f"\nMean Weighted AUC for {method}: {score:.4f}")
     print("\nPer-label AUCs:")
