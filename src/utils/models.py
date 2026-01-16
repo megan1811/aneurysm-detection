@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class CoordMLP(nn.Module):
@@ -137,3 +138,56 @@ class PatchClassifier(nn.Module):
         loc_logits = self.head_location(h)  # (B, 13)
 
         return pres_logits, loc_logits
+
+
+class ScanClassifier(nn.Module):
+    def __init__(self, embed_dim=512, num_locations=13, hidden_dim=64):
+        super().__init__()
+        self.pres_proj = nn.Sequential(
+            nn.Linear(embed_dim + 1 + 3, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        self.loc_proj = nn.Sequential(
+            nn.Linear(embed_dim + num_locations + 3, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+        self.att_pres = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 8),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 8, 1),
+        )
+        self.att_loc = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 8),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 8, 1),
+        )
+        # Final scan-level heads
+        self.fc_presence = nn.Linear(hidden_dim * 2, 1)
+        self.fc_location = nn.Linear(hidden_dim * 2, num_locations)
+
+    def forward(self, embeddings, presence_logits, location_logits, centers_norm):
+        # Presence features: Binary logit broadens signal.
+        pres_feats = torch.cat([embeddings, presence_logits, centers_norm], dim=-1)
+        pres_feats = self.pres_proj(pres_feats)  # [N, hidden]
+
+        # Location features: Softmax loc_logits as multi-hot prior.
+        loc_feats = torch.cat([embeddings, location_logits, centers_norm], dim=-1)
+        loc_feats = self.loc_proj(loc_feats)  # [N, hidden]
+
+        # ---- MIL attention pooling ----
+        A_pres = torch.softmax(self.att_pres(pres_feats).squeeze(-1), dim=0)
+        A_loc = torch.softmax(self.att_loc(loc_feats).squeeze(-1), dim=0)
+
+        bag_pres = (A_pres.unsqueeze(-1) * pres_feats).sum(0)
+        bag_loc = (A_loc.unsqueeze(-1) * loc_feats).sum(0)
+
+        # ---- fuse ----
+        fused = torch.cat([bag_pres, bag_loc], dim=0)
+
+        presence_logit = self.fc_presence(fused).squeeze()
+        location_logits = self.fc_location(fused)
+
+        return presence_logit, location_logits, A_pres, A_loc

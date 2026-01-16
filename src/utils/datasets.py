@@ -133,12 +133,16 @@ class ScanDataset(Dataset):
 
         # Patch-level data (variable length)
         centers_norm = torch.from_numpy(data["centers_norm"]).float()  # (N, 3)
-        presence_logits = torch.from_numpy(data["presence_logits"]).float()  # (N,)
+        presence_logits = (
+            torch.from_numpy(data["presence_logits"]).float().unsqueeze(-1)
+        )  # (N,1)
         location_logits = torch.from_numpy(data["location_logits"]).float()  # (N, 13)
         embeddings = torch.from_numpy(data["embeddings"]).float()  # (N, D)
 
         # Scan-level labels
         y = torch.from_numpy(data["y"]).float()  # (14,)
+        y_presence = y[-1]
+        y_location = y[:13]
 
         # Metadata (keep as Python types)
         series_id = str(data["series_id"])
@@ -149,6 +153,8 @@ class ScanDataset(Dataset):
             "location_logits": location_logits,
             "embeddings": embeddings,
             "centers_norm": centers_norm,
+            "y_presence": y_presence,
+            "y_location": y_location,
             "y": y,
             "series_id": series_id,
             "modality": modality,
