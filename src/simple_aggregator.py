@@ -4,8 +4,8 @@ from pathlib import Path
 from tqdm import tqdm
 from functools import partial
 from scipy.special import expit, logsumexp
-from sklearn.metrics import roc_auc_score
 
+from utils.metrics import mean_weighted_columnwise_auc
 from utils.datasets import ScanDataset
 from utils.CONSTANTS import LABEL_COLS
 
@@ -24,7 +24,7 @@ def aggregate_scan_lse(item: dict, tau: float = 1.0) -> np.ndarray:
     Returns:
         np.ndarray: Scan-level prediction of shape (14,)
     """
-    presence_logits = item["presence_logits"].numpy()  # (N,)
+    presence_logits = item["presence_logits"].numpy()  # (N, 1)
     location_logits = item["location_logits"].numpy()  # (N, 13)
 
     y_hat = np.zeros(14, dtype=np.float32)
@@ -58,7 +58,7 @@ def aggregate_scan_topk(item: dict, k: int = 3) -> np.ndarray:
     Returns:
         np.ndarray: Scan-level prediction of shape (14,)
     """
-    presence_logits = item["presence_logits"].numpy()  # (N,)
+    presence_logits = item["presence_logits"].numpy()  # (N, 1)
     location_logits = item["location_logits"].numpy()  # (N, 13)
 
     y_hat = np.zeros(14, dtype=np.float32)
@@ -99,33 +99,6 @@ def run_aggregator(
         y_pred.append(aggregate_scan(item))
 
     return np.stack(y_true), np.stack(y_pred)
-
-
-def mean_weighted_columnwise_auc(y_true: np.ndarray, y_pred: np.ndarray):
-    """
-    Mean Weighted Columnwise AUROC as defined by the challenge.
-
-    Label 13 (Aneurysm Present) has weight 13, others weight 1.
-    """
-    aucs = []
-
-    for i in range(y_true.shape[1]):
-        # Skip labels with no positive or no negative examples
-        if len(np.unique(y_true[:, i])) < 2:
-            aucs.append(np.nan)
-            continue
-
-        aucs.append(roc_auc_score(y_true[:, i], y_pred[:, i]))
-
-    aucs = np.array(aucs)
-
-    # weights: 1 for first 13, 13 for last
-    weights = np.ones(14)
-    weights[13] = 13.0
-
-    weighted_mean_auc = np.nansum(weights * aucs) / np.nansum(weights)
-
-    return weighted_mean_auc, aucs
 
 
 def list_scan_files(data_paths: list[Path]) -> list[Path]:
